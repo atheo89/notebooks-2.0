@@ -63,6 +63,37 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
+# Creates a local Kubernetes cluster named kind-notebooks. By default, it proceeds to install essential cluster components: cert-manager and metrics-server.
+#  Metrics Server installation can be optionally skipped via a flag.
+# - INSTALL_METRICS_SERVER=false
+# Override cluster name with:
+# - CLUSTER_NAME=<your-custom-name>
+CLUSTER_NAME ?= kind-notebooks
+INSTALL_METRICS_SERVER ?= true
+
+.PHONY: kind-notebooks
+kind-notebooks:
+	KIND_EXPERIMENTAL_PROVIDER=$(CONTAINER_TOOL) kind delete cluster --name $(CLUSTER_NAME) || true
+	KIND_EXPERIMENTAL_PROVIDER=$(CONTAINER_TOOL) kind create cluster --name $(CLUSTER_NAME)
+
+	@echo "--- Installing cert-manager ---"
+	kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+
+	kubectl wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=300s
+	@echo "Cert Manager installed. Version: $$(bash -c "kubectl get deployment cert-manager -n cert-manager -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d: -f2")"
+ifeq ($(INSTALL_METRICS_SERVER),true)
+	@echo "--- Installing metrics-server ---"
+	kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+	kubectl patch deployment metrics-server --namespace kube-system --type='json' --patch='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+	
+	kubectl wait --for=condition=Available deployment/metrics-server -n kube-system --timeout=300s
+	@echo "Metrics Server installed. Version: $$(bash -c "kubectl get deployment metrics-server -n kube-system -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d: -f2")"
+else
+	@echo "--- Skipping metrics-server installation (INSTALL_METRICS_SERVER set to $(INSTALL_METRICS_SERVER)) ---"
+endif
+	@echo "--- Setting the current context to $(CLUSTER_NAME) cluster ---"
+	kubectl config set-context kind-$(CLUSTER_NAME) --namespace=workspace-controller-system
+
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
 # Prometheus and CertManager are installed by default; skip with:
 # - PROMETHEUS_INSTALL_SKIP=true
