@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+IMG ?= quay.io/rh_ee_atheodor/controller:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.31.0
 
@@ -14,7 +14,7 @@ endif
 # Be aware that the target commands are only tested with Docker which is
 # scaffolded by default. However, you might want to replace it to use other
 # tools. (i.e. podman)
-CONTAINER_TOOL ?= docker
+CONTAINER_TOOL ?= podman
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -94,6 +94,14 @@ endif
 	@echo "--- Setting the current context to $(CLUSTER_NAME) cluster ---"
 	kubectl config set-context kind-$(CLUSTER_NAME) --namespace=workspace-controller-system
 
+.PHONY: cntr-installation-monitor
+cntr-installation-monitor: install deploy
+	@echo "--- Check installation ---"
+	kubectl wait --for=condition=Available deployment/workspace-controller-controller-manager --timeout=300s
+	@POD=$$(kubectl get pods --no-headers -o custom-columns=":metadata.name" | grep workspace-controller-controller-manager | head -n 1); \
+	kubectl wait --for=condition=Ready pod/$$POD --timeout=60s; \
+	kubectl logs -f $$POD
+
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
 # Prometheus and CertManager are installed by default; skip with:
 # - PROMETHEUS_INSTALL_SKIP=true
@@ -138,6 +146,9 @@ docker-build: ## Build docker image with the manager.
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
+
+.PHONY: image
+image: docker-build docker-push 
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
