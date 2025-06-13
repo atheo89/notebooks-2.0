@@ -1,0 +1,412 @@
+diff --git a/workspaces/backend/cmd/main.go b/workspaces/backend/cmd/main.go
+index cbce9f6..2b4abcb 100644
+--- a/workspaces/backend/cmd/main.go
++++ b/workspaces/backend/cmd/main.go
+@@ -23,6 +23,8 @@ import (
+ 	"strconv"
+ 
+ 	ctrl "sigs.k8s.io/controller-runtime"
++	"sigs.k8s.io/controller-runtime/pkg/cache"
++	"sigs.k8s.io/controller-runtime/pkg/client"
+ 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+ 
+ 	application "github.com/kubeflow/notebooks/workspaces/backend/api"
+@@ -30,6 +32,9 @@ import (
+ 	"github.com/kubeflow/notebooks/workspaces/backend/internal/config"
+ 	"github.com/kubeflow/notebooks/workspaces/backend/internal/helper"
+ 	"github.com/kubeflow/notebooks/workspaces/backend/internal/server"
++	"k8s.io/apimachinery/pkg/labels"
++	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
++	"k8s.io/utils/ptr"
+ )
+ 
+ //	@title			Kubeflow Notebooks API
+@@ -120,6 +125,18 @@ func main() {
+ 		},
+ 		HealthProbeBindAddress: "0", // disable health probe serving
+ 		LeaderElection:         false,
++		Cache: cache.Options{
++			ByObject: map[client.Object]cache.ByObject{
++				&metricsv1beta1.PodMetrics{}: {
++					UnsafeDisableDeepCopy: ptr.To(true),
++					Label:                 labels.Nothing(), // Prevent watch operations
++				},
++				&metricsv1beta1.NodeMetrics{}: {
++					UnsafeDisableDeepCopy: ptr.To(true),
++					Label:                 labels.Nothing(), // Prevent watch operations
++				},
++			},
++		},
+ 	})
+ 	if err != nil {
+ 		logger.Error("unable to create manager", "error", err)
+diff --git a/workspaces/backend/go.mod b/workspaces/backend/go.mod
+index ab546a8..51d2828 100644
+--- a/workspaces/backend/go.mod
++++ b/workspaces/backend/go.mod
+@@ -15,6 +15,7 @@ require (
+ 	k8s.io/apimachinery v0.31.0
+ 	k8s.io/apiserver v0.31.0
+ 	k8s.io/client-go v0.31.0
++	k8s.io/metrics v0.31.0
+ 	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
+ 	sigs.k8s.io/controller-runtime v0.19.1
+ )
+diff --git a/workspaces/backend/go.sum b/workspaces/backend/go.sum
+index 4e67123..0c20fcb 100644
+--- a/workspaces/backend/go.sum
++++ b/workspaces/backend/go.sum
+@@ -240,6 +240,8 @@ k8s.io/klog/v2 v2.130.1 h1:n9Xl7H1Xvksem4KFG4PYbdQCQxqc/tTUyrgXaOhHSzk=
+ k8s.io/klog/v2 v2.130.1/go.mod h1:3Jpz1GvMt720eyJH1ckRHK1EDfpxISzJ7I9OYgaDtPE=
+ k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340 h1:BZqlfIlq5YbRMFko6/PM7FjZpUb45WallggurYhKGag=
+ k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340/go.mod h1:yD4MZYeKMBwQKVht279WycxKyM84kkAx2DPrTXaeb98=
++k8s.io/metrics v0.31.0 h1:s7Vu7W0oEZPTN8jgcoiWIXIZBmVxt7YP9MRVyIgMdOc=
++k8s.io/metrics v0.31.0/go.mod h1:UNsz6swyX8FWkDoKN9ixPF75TBREMbHZIKjD7fydaOY=
+ k8s.io/utils v0.0.0-20240711033017-18e509b52bc8 h1:pUdcCO1Lk/tbT5ztQWOBi5HBgbBP1J8+AsQnQCKsi8A=
+ k8s.io/utils v0.0.0-20240711033017-18e509b52bc8/go.mod h1:OLgZIPagt7ERELqWJFomSt595RzquPNLL48iOWgYOg0=
+ sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.30.3 h1:2770sDpzrjjsAtVhSeUFseziht227YAWYHLGNM8QPwY=
+diff --git a/workspaces/backend/internal/helper/k8s.go b/workspaces/backend/internal/helper/k8s.go
+index 74532f8..9964880 100644
+--- a/workspaces/backend/internal/helper/k8s.go
++++ b/workspaces/backend/internal/helper/k8s.go
+@@ -22,6 +22,7 @@ import (
+ 	kubefloworgv1beta1 "github.com/kubeflow/notebooks/workspaces/controller/api/v1beta1"
+ 	"k8s.io/apimachinery/pkg/runtime"
+ 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
++	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+ )
+ 
+ // BuildScheme returns builds a new runtime scheme with all the necessary types registered.
+@@ -33,5 +34,9 @@ func BuildScheme() (*runtime.Scheme, error) {
+ 	if err := kubefloworgv1beta1.AddToScheme(scheme); err != nil {
+ 		return nil, fmt.Errorf("failed to add Kubeflow types to scheme: %w", err)
+ 	}
++	if err := metricsv1beta1.AddToScheme(scheme); err != nil {
++		return nil, fmt.Errorf("failed to add metrics types to scheme: %w", err)
++	}
++
+ 	return scheme, nil
+ }
+diff --git a/workspaces/backend/internal/models/workspaces/types.go b/workspaces/backend/internal/models/workspaces/types.go
+index 4e8ddae..34ad9d1 100644
+--- a/workspaces/backend/internal/models/workspaces/types.go
++++ b/workspaces/backend/internal/models/workspaces/types.go
+@@ -31,6 +31,7 @@ type Workspace struct {
+ 	PodTemplate    PodTemplate       `json:"podTemplate"`
+ 	Activity       Activity          `json:"activity"`
+ 	Services       []Service         `json:"services"`
++	Metrics        *WorkspaceMetrics `json:"metrics,omitempty"`
+ }
+ 
+ type WorkspaceState string
+@@ -161,3 +162,15 @@ type HttpService struct {
+ 	DisplayName string `json:"displayName"`
+ 	HttpPath    string `json:"httpPath"`
+ }
++
++type WorkspaceMetrics struct {
++	CPU    ResourceMetrics `json:"cpu"`
++	Memory ResourceMetrics `json:"memory"`
++}
++
++type ResourceMetrics struct {
++	Usage   string `json:"usage"`
++	Request string `json:"request,omitempty"`
++	Limit   string `json:"limit,omitempty"`
++	Percent int    `json:"percent,omitempty"`
++}
+diff --git a/workspaces/backend/internal/repositories/workspaces/repo.go b/workspaces/backend/internal/repositories/workspaces/repo.go
+index 82f3ead..d3a243d 100644
+--- a/workspaces/backend/internal/repositories/workspaces/repo.go
++++ b/workspaces/backend/internal/repositories/workspaces/repo.go
+@@ -19,16 +19,24 @@ package workspaces
+ import (
+ 	"context"
+ 	"fmt"
++	"math"
+ 
+ 	kubefloworgv1beta1 "github.com/kubeflow/notebooks/workspaces/controller/api/v1beta1"
++	corev1 "k8s.io/api/core/v1"
+ 	apierrors "k8s.io/apimachinery/pkg/api/errors"
++	"k8s.io/apimachinery/pkg/api/resource"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+ 	"k8s.io/utils/ptr"
+ 	"sigs.k8s.io/controller-runtime/pkg/client"
+ 
+ 	models "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspaces"
+ )
+ 
++// Disable watching for metrics resources
++var _ client.Object = &metricsv1beta1.PodMetrics{}
++var _ client.Object = &metricsv1beta1.NodeMetrics{}
++
+ var ErrWorkspaceNotFound = fmt.Errorf("workspace not found")
+ var ErrWorkspaceAlreadyExists = fmt.Errorf("workspace already exists")
+ 
+@@ -42,6 +50,75 @@ func NewWorkspaceRepository(cl client.Client) *WorkspaceRepository {
+ 	}
+ }
+ 
++func (r *WorkspaceRepository) getPodMetrics(ctx context.Context, namespace, podName string) (*models.WorkspaceMetrics, error) {
++	// Initialize empty metrics object
++	metrics := &models.WorkspaceMetrics{
++		CPU:    models.ResourceMetrics{},
++		Memory: models.ResourceMetrics{},
++	}
++
++	// Get pod to access resource requests/limits
++	pod := &corev1.Pod{}
++	if err := r.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, pod); err != nil {
++		return nil, err
++	}
++
++	// Get pod metrics using the REST client
++	podMetrics := &metricsv1beta1.PodMetrics{}
++	if err := r.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, podMetrics); err != nil {
++		// If metrics server is not available or pod metrics not found, return empty metrics
++		if apierrors.IsNotFound(err) || apierrors.IsServiceUnavailable(err) {
++			return metrics, nil
++		}
++		return nil, err
++	}
++
++	// Process CPU metrics
++	if len(podMetrics.Containers) > 0 {
++		if cpuUsage := podMetrics.Containers[0].Usage.Cpu(); cpuUsage != nil {
++			metrics.CPU.Usage = cpuUsage.String()
++		}
++	}
++	if cpuRequest := pod.Spec.Containers[0].Resources.Requests.Cpu(); cpuRequest != nil {
++		metrics.CPU.Request = cpuRequest.String()
++	}
++	if cpuLimit := pod.Spec.Containers[0].Resources.Limits.Cpu(); cpuLimit != nil {
++		metrics.CPU.Limit = cpuLimit.String()
++	}
++
++	// Process Memory metrics
++	if len(podMetrics.Containers) > 0 {
++		if memUsage := podMetrics.Containers[0].Usage.Memory(); memUsage != nil {
++			metrics.Memory.Usage = memUsage.String()
++		}
++	}
++	if memRequest := pod.Spec.Containers[0].Resources.Requests.Memory(); memRequest != nil {
++		metrics.Memory.Request = memRequest.String()
++	}
++	if memLimit := pod.Spec.Containers[0].Resources.Limits.Memory(); memLimit != nil {
++		metrics.Memory.Limit = memLimit.String()
++	}
++
++	// Calculate percentages if both usage and request/limit are available
++	if metrics.CPU.Usage != "" && metrics.CPU.Request != "" {
++		usage, _ := resource.ParseQuantity(metrics.CPU.Usage)
++		request, _ := resource.ParseQuantity(metrics.CPU.Request)
++		if request.Value() > 0 {
++			metrics.CPU.Percent = int(math.Round(float64(usage.Value()) / float64(request.Value()) * 100))
++		}
++	}
++
++	if metrics.Memory.Usage != "" && metrics.Memory.Request != "" {
++		usage, _ := resource.ParseQuantity(metrics.Memory.Usage)
++		request, _ := resource.ParseQuantity(metrics.Memory.Request)
++		if request.Value() > 0 {
++			metrics.Memory.Percent = int(math.Round(float64(usage.Value()) / float64(request.Value()) * 100))
++		}
++	}
++
++	return metrics, nil
++}
++
+ func (r *WorkspaceRepository) GetWorkspace(ctx context.Context, namespace string, workspaceName string) (models.Workspace, error) {
+ 	// get workspace
+ 	workspace := &kubefloworgv1beta1.Workspace{}
+@@ -65,6 +142,20 @@ func (r *WorkspaceRepository) GetWorkspace(ctx context.Context, namespace string
+ 	// convert workspace to model
+ 	workspaceModel := models.NewWorkspaceModelFromWorkspace(workspace, workspaceKind)
+ 
++	// Get pod metrics if the workspace is running
++	if workspaceModel.State == models.WorkspaceStateRunning {
++		// Get the pod name from the workspace status
++		if podName := workspace.Status.PodTemplatePod.Name; podName != "" {
++			metrics, err := r.getPodMetrics(ctx, namespace, podName)
++			if err != nil {
++				// Log error but don't fail the request
++				fmt.Printf("Error getting pod metrics: %v\n", err)
++			} else {
++				workspaceModel.Metrics = metrics
++			}
++		}
++	}
++
+ 	return workspaceModel, nil
+ }
+ 
+diff --git a/workspaces/backend/openapi/docs.go b/workspaces/backend/openapi/docs.go
+index f255e86..2a70219 100644
+--- a/workspaces/backend/openapi/docs.go
++++ b/workspaces/backend/openapi/docs.go
+@@ -1269,6 +1269,23 @@ const docTemplate = `{
+                 }
+             }
+         },
++        "workspaces.ResourceMetrics": {
++            "type": "object",
++            "properties": {
++                "limit": {
++                    "type": "string"
++                },
++                "percent": {
++                    "type": "integer"
++                },
++                "request": {
++                    "type": "string"
++                },
++                "usage": {
++                    "type": "string"
++                }
++            }
++        },
+         "workspaces.Service": {
+             "type": "object",
+             "properties": {
+@@ -1286,6 +1303,9 @@ const docTemplate = `{
+                 "deferUpdates": {
+                     "type": "boolean"
+                 },
++                "metrics": {
++                    "$ref": "#/definitions/workspaces.WorkspaceMetrics"
++                },
+                 "name": {
+                     "type": "string"
+                 },
+@@ -1358,6 +1378,17 @@ const docTemplate = `{
+                 }
+             }
+         },
++        "workspaces.WorkspaceMetrics": {
++            "type": "object",
++            "properties": {
++                "cpu": {
++                    "$ref": "#/definitions/workspaces.ResourceMetrics"
++                },
++                "memory": {
++                    "$ref": "#/definitions/workspaces.ResourceMetrics"
++                }
++            }
++        },
+         "workspaces.WorkspaceState": {
+             "type": "string",
+             "enum": [
+diff --git a/workspaces/backend/openapi/swagger.json b/workspaces/backend/openapi/swagger.json
+index ef67382..80781d6 100644
+--- a/workspaces/backend/openapi/swagger.json
++++ b/workspaces/backend/openapi/swagger.json
+@@ -1267,6 +1267,23 @@
+                 }
+             }
+         },
++        "workspaces.ResourceMetrics": {
++            "type": "object",
++            "properties": {
++                "limit": {
++                    "type": "string"
++                },
++                "percent": {
++                    "type": "integer"
++                },
++                "request": {
++                    "type": "string"
++                },
++                "usage": {
++                    "type": "string"
++                }
++            }
++        },
+         "workspaces.Service": {
+             "type": "object",
+             "properties": {
+@@ -1284,6 +1301,9 @@
+                 "deferUpdates": {
+                     "type": "boolean"
+                 },
++                "metrics": {
++                    "$ref": "#/definitions/workspaces.WorkspaceMetrics"
++                },
+                 "name": {
+                     "type": "string"
+                 },
+@@ -1356,6 +1376,17 @@
+                 }
+             }
+         },
++        "workspaces.WorkspaceMetrics": {
++            "type": "object",
++            "properties": {
++                "cpu": {
++                    "$ref": "#/definitions/workspaces.ResourceMetrics"
++                },
++                "memory": {
++                    "$ref": "#/definitions/workspaces.ResourceMetrics"
++                }
++            }
++        },
+         "workspaces.WorkspaceState": {
+             "type": "string",
+             "enum": [
+diff --git a/workspaces/backend/openapi/swagger.yaml b/workspaces/backend/openapi/swagger.yaml
+index 9cae763..5480075 100644
+--- a/workspaces/backend/openapi/swagger.yaml
++++ b/workspaces/backend/openapi/swagger.yaml
+@@ -486,6 +486,17 @@ definitions:
+       targetId:
+         type: string
+     type: object
++  workspaces.ResourceMetrics:
++    properties:
++      limit:
++        type: string
++      percent:
++        type: integer
++      request:
++        type: string
++      usage:
++        type: string
++    type: object
+   workspaces.Service:
+     properties:
+       httpService:
+@@ -497,6 +508,8 @@ definitions:
+         $ref: '#/definitions/workspaces.Activity'
+       deferUpdates:
+         type: boolean
++      metrics:
++        $ref: '#/definitions/workspaces.WorkspaceMetrics'
+       name:
+         type: string
+       namespace:
+@@ -544,6 +557,13 @@ definitions:
+       name:
+         type: string
+     type: object
++  workspaces.WorkspaceMetrics:
++    properties:
++      cpu:
++        $ref: '#/definitions/workspaces.ResourceMetrics'
++      memory:
++        $ref: '#/definitions/workspaces.ResourceMetrics'
++    type: object
+   workspaces.WorkspaceState:
+     enum:
+     - Running
+diff --git a/workspaces/controller/config/manager/kustomization.yaml b/workspaces/controller/config/manager/kustomization.yaml
+index 2c5fb1f..bcebb9d 100644
+--- a/workspaces/controller/config/manager/kustomization.yaml
++++ b/workspaces/controller/config/manager/kustomization.yaml
+@@ -4,5 +4,5 @@ resources:
+ - manager.yaml
+ images:
+ - name: controller
+-  newName: ghcr.io/kubeflow/notebooks/workspace-controller
+-  newTag: latest
++  newName: quay.io/rh-ee-astonebe/kubeflow-notebooks-v2
++  newTag: controller-secrets-verify

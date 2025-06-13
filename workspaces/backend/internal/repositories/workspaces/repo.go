@@ -19,15 +19,23 @@ package workspaces
 import (
 	"context"
 	"fmt"
+	"math"
 
 	kubefloworgv1beta1 "github.com/kubeflow/notebooks/workspaces/controller/api/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	models "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspaces"
 )
+
+// Disable watching for metrics resources
+var _ client.Object = &metricsv1beta1.PodMetrics{}
+var _ client.Object = &metricsv1beta1.NodeMetrics{}
 
 var ErrWorkspaceNotFound = fmt.Errorf("workspace not found")
 var ErrWorkspaceAlreadyExists = fmt.Errorf("workspace already exists")
@@ -40,6 +48,80 @@ func NewWorkspaceRepository(cl client.Client) *WorkspaceRepository {
 	return &WorkspaceRepository{
 		client: cl,
 	}
+}
+
+func (r *WorkspaceRepository) getPodMetrics(ctx context.Context, namespace, podName string) (*models.WorkspaceMetrics, error) {
+	// Initialize empty metrics object
+	metrics := &models.WorkspaceMetrics{
+		CPU:    models.ResourceMetrics{},
+		Memory: models.ResourceMetrics{},
+	}
+
+	// Get pod to access resource requests/limits
+	pod := &corev1.Pod{}
+	if err := r.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, pod); err != nil {
+		return nil, err
+	}
+
+	// Get pod metrics using the REST client
+	podMetrics := &metricsv1beta1.PodMetrics{}
+	if err := r.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, podMetrics); err != nil {
+		if apierrors.IsNotFound(err) {
+			return metrics, nil
+		}
+		if apierrors.IsForbidden(err) {
+			return nil, fmt.Errorf("permission denied: unable to access metrics API. Please check RBAC configuration: %w", err)
+		}
+		if apierrors.IsServiceUnavailable(err) {
+			return nil, fmt.Errorf("metrics server is not available: %w", err)
+		}
+		return nil, fmt.Errorf("failed to get pod metrics: %w", err)
+	}
+
+	// Process CPU metrics
+	if len(podMetrics.Containers) > 0 {
+		if cpuUsage := podMetrics.Containers[0].Usage.Cpu(); cpuUsage != nil {
+			metrics.CPU.Usage = cpuUsage.String()
+		}
+	}
+	if cpuRequest := pod.Spec.Containers[0].Resources.Requests.Cpu(); cpuRequest != nil {
+		metrics.CPU.Request = cpuRequest.String()
+	}
+	if cpuLimit := pod.Spec.Containers[0].Resources.Limits.Cpu(); cpuLimit != nil {
+		metrics.CPU.Limit = cpuLimit.String()
+	}
+
+	// Process Memory metrics
+	if len(podMetrics.Containers) > 0 {
+		if memUsage := podMetrics.Containers[0].Usage.Memory(); memUsage != nil {
+			metrics.Memory.Usage = memUsage.String()
+		}
+	}
+	if memRequest := pod.Spec.Containers[0].Resources.Requests.Memory(); memRequest != nil {
+		metrics.Memory.Request = memRequest.String()
+	}
+	if memLimit := pod.Spec.Containers[0].Resources.Limits.Memory(); memLimit != nil {
+		metrics.Memory.Limit = memLimit.String()
+	}
+
+	// Calculate percentages if both usage and request/limit are available
+	if metrics.CPU.Usage != "" && metrics.CPU.Request != "" {
+		usage, _ := resource.ParseQuantity(metrics.CPU.Usage)
+		request, _ := resource.ParseQuantity(metrics.CPU.Request)
+		if request.Value() > 0 {
+			metrics.CPU.Percent = int(math.Round(float64(usage.Value()) / float64(request.Value()) * 100))
+		}
+	}
+
+	if metrics.Memory.Usage != "" && metrics.Memory.Request != "" {
+		usage, _ := resource.ParseQuantity(metrics.Memory.Usage)
+		request, _ := resource.ParseQuantity(metrics.Memory.Request)
+		if request.Value() > 0 {
+			metrics.Memory.Percent = int(math.Round(float64(usage.Value()) / float64(request.Value()) * 100))
+		}
+	}
+
+	return metrics, nil
 }
 
 func (r *WorkspaceRepository) GetWorkspace(ctx context.Context, namespace string, workspaceName string) (models.Workspace, error) {
@@ -64,6 +146,20 @@ func (r *WorkspaceRepository) GetWorkspace(ctx context.Context, namespace string
 
 	// convert workspace to model
 	workspaceModel := models.NewWorkspaceModelFromWorkspace(workspace, workspaceKind)
+
+	// Get pod metrics if the workspace is running
+	if workspaceModel.State == models.WorkspaceStateRunning {
+		// Get the pod name from the workspace status
+		if podName := workspace.Status.PodTemplatePod.Name; podName != "" {
+			metrics, err := r.getPodMetrics(ctx, namespace, podName)
+			if err != nil {
+				// Log error but don't fail the request
+				fmt.Printf("Error getting pod metrics: %v\n", err)
+			} else {
+				workspaceModel.Metrics = metrics
+			}
+		}
+	}
 
 	return workspaceModel, nil
 }

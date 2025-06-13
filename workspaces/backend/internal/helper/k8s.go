@@ -22,6 +22,7 @@ import (
 	kubefloworgv1beta1 "github.com/kubeflow/notebooks/workspaces/controller/api/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
 // BuildScheme returns builds a new runtime scheme with all the necessary types registered.
@@ -33,5 +34,9 @@ func BuildScheme() (*runtime.Scheme, error) {
 	if err := kubefloworgv1beta1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("failed to add Kubeflow types to scheme: %w", err)
 	}
+	if err := metricsv1beta1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("failed to add metrics types to scheme: %w", err)
+	}
+
 	return scheme, nil
 }

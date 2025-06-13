@@ -486,6 +486,17 @@ definitions:
       targetId:
         type: string
     type: object
+  workspaces.ResourceMetrics:
+    properties:
+      limit:
+        type: string
+      percent:
+        type: integer
+      request:
+        type: string
+      usage:
+        type: string
+    type: object
   workspaces.Service:
     properties:
       httpService:
@@ -497,6 +508,8 @@ definitions:
         $ref: '#/definitions/workspaces.Activity'
       deferUpdates:
         type: boolean
+      metrics:
+        $ref: '#/definitions/workspaces.WorkspaceMetrics'
       name:
         type: string
       namespace:
@@ -543,6 +556,13 @@ definitions:
         type: boolean
       name:
         type: string
+    type: object
+  workspaces.WorkspaceMetrics:
+    properties:
+      cpu:
+        $ref: '#/definitions/workspaces.ResourceMetrics'
+      memory:
+        $ref: '#/definitions/workspaces.ResourceMetrics'
     type: object
   workspaces.WorkspaceState:
     enum:

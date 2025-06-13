@@ -23,6 +23,8 @@ import (
 	"strconv"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	application "github.com/kubeflow/notebooks/workspaces/backend/api"
@@ -30,6 +32,8 @@ import (
 	"github.com/kubeflow/notebooks/workspaces/backend/internal/config"
 	"github.com/kubeflow/notebooks/workspaces/backend/internal/helper"
 	"github.com/kubeflow/notebooks/workspaces/backend/internal/server"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+	"k8s.io/utils/ptr"
 )
 
 //	@title			Kubeflow Notebooks API
@@ -120,6 +124,16 @@ func main() {
 		},
 		HealthProbeBindAddress: "0", // disable health probe serving
 		LeaderElection:         false,
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&metricsv1beta1.PodMetrics{}: {
+					UnsafeDisableDeepCopy: ptr.To(true),
+				},
+				&metricsv1beta1.NodeMetrics{}: {
+					UnsafeDisableDeepCopy: ptr.To(true),
+				},
+			},
+		},
 	})
 	if err != nil {
 		logger.Error("unable to create manager", "error", err)

@@ -1269,6 +1269,23 @@ const docTemplate = `{
                 }
             }
         },
+        "workspaces.ResourceMetrics": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "string"
+                },
+                "percent": {
+                    "type": "integer"
+                },
+                "request": {
+                    "type": "string"
+                },
+                "usage": {
+                    "type": "string"
+                }
+            }
+        },
         "workspaces.Service": {
             "type": "object",
             "properties": {
@@ -1285,6 +1302,9 @@ const docTemplate = `{
                 },
                 "deferUpdates": {
                     "type": "boolean"
+                },
+                "metrics": {
+                    "$ref": "#/definitions/workspaces.WorkspaceMetrics"
                 },
                 "name": {
                     "type": "string"
@@ -1355,6 +1375,17 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "workspaces.WorkspaceMetrics": {
+            "type": "object",
+            "properties": {
+                "cpu": {
+                    "$ref": "#/definitions/workspaces.ResourceMetrics"
+                },
+                "memory": {
+                    "$ref": "#/definitions/workspaces.ResourceMetrics"
                 }
             }
         },

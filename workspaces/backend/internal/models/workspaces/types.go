@@ -31,6 +31,7 @@ type Workspace struct {
 	PodTemplate    PodTemplate       `json:"podTemplate"`
 	Activity       Activity          `json:"activity"`
 	Services       []Service         `json:"services"`
+	Metrics        *WorkspaceMetrics `json:"metrics,omitempty"`
 }
 
 type WorkspaceState string
@@ -160,4 +161,16 @@ type Service struct {
 type HttpService struct {
 	DisplayName string `json:"displayName"`
 	HttpPath    string `json:"httpPath"`
+}
+
+type WorkspaceMetrics struct {
+	CPU    ResourceMetrics `json:"cpu"`
+	Memory ResourceMetrics `json:"memory"`
+}
+
+type ResourceMetrics struct {
+	Usage   string `json:"usage"`
+	Request string `json:"request,omitempty"`
+	Limit   string `json:"limit,omitempty"`
+	Percent int    `json:"percent,omitempty"`
 }
